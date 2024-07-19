@@ -18,6 +18,7 @@ from db_model import get_db, AppVector, SessionLocal
 import sentence_transformers
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from transformers import CLIPProcessor, CLIPModel
 
 
 class IgnoreHealthCheck(logging.Filter):
@@ -41,6 +42,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 text_model = sentence_transformers.SentenceTransformer(config("MODEL_NAME", "BAAI/bge-small-en-v1.5"))
+model = CLIPModel.from_pretrained(config("CLIP_MODEL_NAME", "openai/clip-vit-base-patch32"))
+processor = CLIPProcessor.from_pretrained(config("CLIP_MODEL_NAME", "openai/clip-vit-base-patch32"))
 
 # route handlers
 @app.get("/healthz", tags=["root"])
@@ -49,10 +52,28 @@ async def healthz() -> dict:
         "healthz": "👍"
     }
 
-@app.get("/embed", tags=["embed"])
+@app.get("/embed_image", tags=["embed"])
+async def embed_image(image_url: str) -> List[float]:
+    try:
+        response = requests.get(image_url, stream=True)
+        response.raise_for_status()
+
+        image = Image.open(response.raw)
+
+    except RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {e}")
+    except UnidentifiedImageError:
+        raise HTTPException(status_code=400,
+                            detail="Failed to identify image. Ensure the URL points to a valid image file.")
+    inputs = processor(images=image, return_tensors="pt")
+    outputs = model.get_image_features(**inputs)
+    image_embeddings = outputs.detach().numpy().tolist()[0]
+    return [round(x, 6) for x in image_embeddings]
+
+@app.get("/embed_text", tags=["embed"])
 async def embed_text(text: str) -> List[float]:
     lst = text_model.encode([text]).tolist()[0]
-    lst =  [round(x, 6) for x in lst]
+    lst = [round(x, 6) for x in lst]
     return lst
 
 
